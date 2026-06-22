@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fin Planner — Architecture Map</title>
+<style>
+  :root{
+    --bg:#0F0F0F; --panel:#161616; --panel-2:#1c1c1c; --border:#2a2a2a;
+    --text:#e8e8e8; --muted:#8a8a8a;
+    --client:#4ea1ff; --route:#7bd389; --service:#c792ea; --db:#ffb86b;
+    --external:#ff6b9d; --critical:#ff3860; --accent:#f5b942; --accent-2:#ff7a45;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden}
+  #app{display:flex;height:100vh;width:100vw}
+  #stage{position:relative;flex:1;overflow:hidden;cursor:grab}
+  #stage.panning{cursor:grabbing}
+  svg{display:block;width:100%;height:100%}
+
+  #topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;
+    align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap;
+    background:linear-gradient(180deg,rgba(15,15,15,.96),rgba(15,15,15,.6) 70%,transparent);
+    pointer-events:none}
+  #topbar > *{pointer-events:auto}
+  .title{font-weight:700;font-size:14px;letter-spacing:.2px;margin-right:6px}
+  .title small{font-weight:400;color:var(--muted);font-size:11px}
+  .chip{font-size:11.5px;padding:5px 11px;border:1px solid var(--border);border-radius:999px;
+    background:var(--panel);color:var(--muted);cursor:pointer;user-select:none;
+    transition:all .12s ease;white-space:nowrap}
+  .chip:hover{color:var(--text);border-color:#3a3a3a}
+  .chip.active{background:var(--accent);color:#1a1300;border-color:var(--accent);font-weight:600}
+
+  #zoom{position:absolute;left:14px;bottom:14px;z-index:10;display:flex;gap:6px}
+  #zoom button{width:32px;height:32px;border:1px solid var(--border);background:var(--panel);
+    color:var(--text);border-radius:8px;cursor:pointer;font-size:15px;line-height:1}
+  #zoom button:hover{border-color:#3a3a3a;background:var(--panel-2)}
+  #zoom .lbl{width:auto;padding:0 10px;font-size:11px;color:var(--muted)}
+
+  #legend{position:absolute;right:360px;bottom:14px;z-index:10;display:flex;gap:14px;
+    background:rgba(22,22,22,.85);border:1px solid var(--border);border-radius:10px;
+    padding:8px 12px;font-size:10.5px;color:var(--muted);flex-wrap:wrap;max-width:46vw}
+  #legend b{color:var(--text)}
+  .lk{display:inline-flex;align-items:center;gap:5px}
+  .lk i{width:18px;height:0;border-top-width:2px;border-top-style:solid;display:inline-block}
+
+  #side{width:348px;flex:0 0 348px;background:var(--panel);border-left:1px solid var(--border);
+    overflow-y:auto;padding:18px 18px 60px;font-size:13px;line-height:1.5}
+  #side h2{font-size:15px;margin:0 0 2px}
+  #side .role{color:var(--text);margin:10px 0 2px;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  #side .roletext{color:var(--text)}
+  #side .plain{color:var(--muted);font-style:italic;margin-top:4px}
+  #side .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    color:var(--accent);background:var(--panel-2);padding:6px 8px;border-radius:6px;
+    margin-top:10px;word-break:break-all;border:1px solid var(--border)}
+  #side ul{margin:6px 0 0;padding-left:16px;color:var(--muted)}
+  #side ul li{margin:3px 0}
+  #side .tag{display:inline-block;font-size:10px;padding:2px 7px;border-radius:999px;
+    border:1px solid var(--border);color:var(--muted);margin:3px 4px 0 0}
+  .edgeline{font-size:11.5px;margin:3px 0;color:var(--muted)}
+  .edgeline b{color:var(--text)}
+  .arrow{color:var(--accent)}
+  .sec{border-top:1px solid var(--border);margin-top:16px;padding-top:12px}
+  .findings li{margin:7px 0;color:var(--text)}
+  .findings .src{color:var(--muted);font-size:11px}
+  .hint{color:var(--muted);font-size:11px;margin-top:14px}
+
+  .cluster{fill-opacity:.16;stroke-opacity:.5;stroke-width:1.2}
+  .cluster-label{font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;fill-opacity:.75}
+  .node rect{fill:var(--panel-2);stroke-width:1.4;transition:opacity .15s}
+  .node.critical rect{stroke-width:2.4}
+  .node .nl{font-size:12.5px;font-weight:600;fill:var(--text)}
+  .node .ns{font-size:10px;fill:var(--muted)}
+  .node{cursor:pointer}
+  .node.dim{opacity:.12}
+  .edge{fill:none;stroke-width:1.4;transition:opacity .15s}
+  /* dimmed edges are fully hidden (was a faint fade — too busy) */
+  .edge.dim{opacity:0}
+  .edge-label{font-size:9.5px;fill:var(--muted);opacity:.9}
+  .edge-label.dim{opacity:0}
+  .node.sel rect{stroke:#fff !important}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="topbar">
+      <span class="title">Fin Planner <small>· FinSight AI — architecture map</small></span>
+      <span id="chips"></span>
+    </div>
+    <svg id="svg">
+      <defs></defs>
+      <g id="viewport">
+        <g id="gClusters"></g>
+        <g id="gEdges"></g>
+        <g id="gEdgeLabels"></g>
+        <g id="gNodes"></g>
+      </g>
+    </svg>
+    <div id="legend"></div>
+    <div id="zoom">
+      <button id="zfit" title="Fit">⤢</button>
+      <button id="zin" title="Zoom in">+</button>
+      <button id="zout" title="Zoom out">−</button>
+      <span class="lbl" id="zlbl">100%</span>
+    </div>
+  </div>
+  <aside id="side"></aside>
+</div>
+
+<script>
+/* ============================================================
+   CLUSTERS  (left → right columns)
+   ============================================================ */
+const clusters = [
+  { id:'client',   label:'Client · UI',          color:'client',   x:20,   y:46, w:280, h:880 },
+  { id:'routes',   label:'API Routes',           color:'route',    x:330,  y:46, w:230, h:880 },
+  { id:'actions',  label:'Server Actions',       color:'service',  x:590,  y:46, w:230, h:880 },
+  { id:'services', label:'AI / Domain Services',  color:'service',  x:850,  y:46, w:260, h:880 },
+  { id:'data',     label:'Data · Supabase',      color:'db',       x:1140, y:46, w:225, h:880 },
+  { id:'external', label:'External',             color:'external', x:1395, y:46, w:235, h:880 },
+];
+
+/* ============================================================
+   NODES
+   ============================================================ */
+const N = (id, cluster, label, sub, x, y, w, h, color, opts={}) =>
+  ({ id, cluster, label, sub, x, y, w, h, color, ...opts });
+
+const nodes = [
+  // ── CLIENT ────────────────────────────────────────────────
+  N('home','client','page.tsx','/ → redirect',35,84,250,46,'client',{
+    role:'Root route. Redirects to /advisor when logged in, else /login.',
+    plain:'The front door. If you are signed in it sends you to the advisor; if not, to the login page.',
+    path:'app/page.tsx',
+    notes:['Server component, no UI of its own'],
+    tag:['overview','auth','all'] }),
+  N('auth-pages','client','login / register','(auth) group',35,140,250,46,'client',{
+    role:'Public sign-in and sign-up pages (no dashboard chrome).',
+    plain:'Where new users create an account and existing users log in.',
+    path:'app/(auth)/login/page.tsx · register/page.tsx',
+    notes:['Use the browser Supabase client','Registration captures POPIA consent timestamp'],
+    tag:['overview','auth','all'] }),
+  N('dash-layout','client','(dashboard)/layout.tsx','auth guard + nav',35,196,250,46,'client',{
+    role:'Protected layout. Enforces auth server-side, loads profile (name, is_admin), renders TopNav.',
+    plain:'The shell around every signed-in page. It checks you are allowed in and draws the top navigation bar.',
+    path:'app/(dashboard)/layout.tsx',
+    notes:['Redirects to /login if no user','Reads profiles.is_admin to show the Admin link'],
+    tag:['overview','auth','all'], critical:true }),
+  N('top-nav','client','top-nav.tsx','header + avatar menu',35,252,250,46,'client',{
+    role:'Client nav bar: Dashboard / Advisor / (Admin) links, avatar dropdown, sign-out.',
+    plain:'The bar across the top with the page links and your profile menu.',
+    path:'components/layout/top-nav.tsx',
+    notes:['Avatar menu: My Profile + Sign out','Sign-out uses the browser Supabase client'],
+    tag:['overview','auth','all'] }),
+  N('advisor-page','client','advisor/page.tsx','server entry',35,312,250,44,'client',{
+    role:'Server component that reads the user and mounts AdvisorContainer.',
+    plain:'The page behind the “AI Advisor” tab. It just hands off to the interactive container.',
+    path:'app/(dashboard)/advisor/page.tsx',
+    notes:['Passes userId to the client container'],
+    tag:['overview','upload','chat','all'] }),
+  N('advisor-container','client','advisor-container.tsx','orchestrator',35,366,250,50,'client',{
+    role:'Top-level advisor state: session, document sets, budget rows, AI-change/move review banners, desktop/mobile split.',
+    plain:'The brain of the advisor screen. It tracks your uploaded statements and the live budget, and wires the chat to the budget table.',
+    path:'app/(dashboard)/advisor/advisor-container.tsx',
+    notes:['handleStreamComplete diffs budget rows after each AI reply to surface Accept/Revert','Scans assistant messages for tool-move_transactions parts (AI SDK v6 shape)'],
+    tag:['overview','upload','chat','budget','all'], critical:true }),
+  N('advisor-chat','client','advisor-chat.tsx','chat + upload UI',35,426,250,52,'client',{
+    role:'useChat stream UI. Hidden file input drives uploads; persists messages to localStorage; always sends sessionId.',
+    plain:'The actual chat window. You type questions or attach a bank statement here; it shows Fin’s replies and remembers the conversation in your browser.',
+    path:'app/(dashboard)/advisor/advisor-chat.tsx',
+    notes:['DefaultChatTransport body always carries { sessionId } → /api/chat','Upload posts to /api/parse-document, then MonthsInputModal asks the statement span','onStreamComplete fires once per stream when status returns to ready'],
+    tag:['overview','upload','chat','all'], critical:true }),
+  N('budget-panel','client','budget-panel.tsx','budget side panel',35,488,250,46,'client',{
+    role:'Collapsible wrapper around BudgetTable: CSV export, bug report, delete-all-data, banners.',
+    plain:'The panel on the right that frames your budget table and its export / delete buttons.',
+    path:'components/advisor/budget-panel.tsx',
+    notes:['Export CSV via buildAdminCsv()','Delete-all-data calls deleteAllUserData()'],
+    tag:['overview','budget','all'] }),
+  N('budget-table','client','budget-table.tsx','interactive budget grid',35,544,250,52,'client',{
+    role:'~1,500-line editable table: sections, per-statement breakdowns, inline estimate edits, move/ignore/delete, bulk actions, AI Accept/Revert.',
+    plain:'Your budget itself — every category with its monthly figure, expandable into the underlying transactions you can move, ignore, or correct.',
+    path:'components/advisor/budget-table.tsx',
+    notes:['Optimistic local row math (applyRowDelta) then server action, rolls back on error','Default server actions can be overridden via the actions prop (admin reuse)','Largest single file in the app'],
+    tag:['overview','budget','admin','all'], critical:true }),
+  N('dashboard-page','client','dashboard/page.tsx','dashboard',35,606,250,48,'client',{
+    role:'Server page that renders the budget table for the user’s uploaded statements.',
+    plain:'The Dashboard tab. Shows the same budget table as the advisor — nothing else now.',
+    path:'app/(dashboard)/dashboard/page.tsx',
+    notes:['KPI cards + profile snapshot were removed in the June 2026 cleanup','Fetches the document session + budget rows, renders DashboardBudgetSection'],
+    tag:['overview','budget','all'] }),
+  N('dashboard-budget-section','client','budget-section.tsx','dashboard budget',35,664,250,44,'client',{
+    role:'Client wrapper rendering BudgetTable on the dashboard.',
+    plain:'Draws the budget table on the Dashboard page.',
+    path:'components/dashboard/budget-section.tsx',
+    notes:['Reuses BudgetTable'],
+    tag:['overview','budget','all'] }),
+  N('admin-container','client','admin-container.tsx','admin budget viewer',35,718,250,48,'client',{
+    role:'Admin UI: pick a user, view/edit their budget table via admin server actions.',
+    plain:'An admin-only screen to open any user’s budget and fix it on their behalf.',
+    path:'app/(dashboard)/admin/admin-container.tsx',
+    notes:['Reuses BudgetTable with admin action overrides','Gated by profiles.is_admin'],
+    tag:['admin','budget','all'] }),
+  N('profile-page','client','profile/page.tsx','profile / KYC',35,776,250,46,'client',{
+    role:'Profile + financial fields editor; onboarding target.',
+    plain:'Where you edit your name and core financial figures; also the first stop for new users.',
+    path:'app/(dashboard)/profile/page.tsx',
+    notes:['Casts client as any (known SSR typing issue)','Writes headline totals to profiles'],
+    tag:['overview','auth','all'] }),
+  N('modals','client','modals & tour','help · months · bug · tour',35,832,250,46,'client',{
+    role:'Supporting client UI: HelpModal, MonthsInputModal, BugReportModal, DocumentStatus, useAdvisorTour (driver.js).',
+    plain:'The small pop-ups: help, “how many months is this statement?”, bug reporting, upload status, and the first-time guided tour.',
+    path:'components/advisor/*.tsx · use-advisor-tour.ts',
+    notes:['MonthsInputModal feeds span_months used by all monthly averaging','useAdvisorTour uses driver.js, fires once a budget is ready'],
+    tag:['overview','upload','all'] }),
+
+  // ── API ROUTES ────────────────────────────────────────────
+  N('middleware','routes','middleware.ts','session + guard',345,140,200,48,'route',{
+    role:'Runs on every request: refreshes Supabase session, redirects unauthenticated users off protected routes.',
+    plain:'A gatekeeper that runs before every page — keeps your login fresh and bounces strangers to the login screen.',
+    path:'middleware.ts',
+    notes:['PUBLIC_ROUTES = /login, /register, /','Clears cookies on refresh_token_not_found','Logged-in users on /login|/register → /advisor'],
+    tag:['overview','auth','all'], critical:true }),
+  N('auth-callback','routes','auth/callback/route.ts','OAuth exchange',345,200,200,46,'route',{
+    role:'Exchanges an auth code for a session, then redirects (default /dashboard).',
+    plain:'Completes email/OAuth sign-in by turning the one-time code into a real session.',
+    path:'app/auth/callback/route.ts',
+    notes:['Falls back to /login?error=confirmation_failed'],
+    tag:['auth','all'] }),
+  N('route-parse','routes','api/parse-document','extract → store → categorize',345,360,200,58,'route',{
+    role:'Upload endpoint. PDFs via pdf-parse, CSV/XLSX via a direct SheetJS parser, images + fallback via GPT vision/text; inserts transactions, then categorizes in-process.',
+    plain:'The upload pipeline. It reads your statement (PDF, spreadsheet, or photo), pulls out every transaction, saves them, and runs categorisation.',
+    path:'app/api/parse-document/route.ts',
+    notes:['xlsxDirectParse skips the AI entirely for well-formed spreadsheets','Now calls categorizeDocumentSet() directly — no HTTP self-call','Creates a new document_set per upload; links it to the session'],
+    tag:['overview','upload','all'], critical:true }),
+  N('route-categorize','routes','api/categorize','categorize endpoint',345,440,200,52,'route',{
+    role:'Thin endpoint: auth + read document_set_id, then delegates to categorizeDocumentSet().',
+    plain:'A small public endpoint that runs categorisation for a given upload. The real work lives in the shared library.',
+    path:'app/api/categorize/route.ts',
+    notes:['Wrapper only since the in-process refactor','Maps the shared result to 404 / 422 / 500'],
+    tag:['overview','upload','all'] }),
+  N('route-chat','routes','api/chat','streaming advisor',345,560,200,56,'route',{
+    role:'Main chat endpoint. Requires a sessionId (missing → 400); streams GPT with budget tools.',
+    plain:'Powers the conversation with Fin. It streams answers and lets the AI drill into categories or move transactions on request.',
+    path:'app/api/chat/route.ts',
+    notes:['Tools: get_category_transactions, move_transactions, update_budget_estimate','stopWhen: stepCountIs(7) so tool-call → result → reply happens in one turn','Calls retrieveContext() on every request'],
+    tag:['overview','chat','budget','kb','all'], critical:true }),
+
+  // ── SERVER ACTIONS ────────────────────────────────────────
+  N('advisor-actions','actions','advisor/actions.ts','budget CRUD',605,348,200,54,'service',{
+    role:'Server actions for the document advisor: getDocumentSession, getBudgetRowsAction, getTransactionsForCategory, move/ignore/delete tx, estimate overrides, custom categories, register doc sets, span months.',
+    plain:'All the save/load operations the budget table needs — moving a transaction, editing an estimate, adding a category.',
+    path:'app/(dashboard)/advisor/actions.ts',
+    notes:['clearMonthlyOverrides() wipes manual monthly edits when a 2nd statement is added','registerDocumentSet assigns upload_order in session_document_sets'],
+    tag:['overview','budget','upload','all'], critical:true }),
+  N('profile-actions','actions','profile/actions.ts','profile + delete-all',605,420,200,52,'service',{
+    role:'Profile updates and deleteAllUserData (service-role wipe of the per-user tables + reset of profile financials).',
+    plain:'Saves your profile, and the big red “delete all my data” button that clears everything you have uploaded.',
+    path:'app/(dashboard)/profile/actions.ts',
+    notes:['Uses the service-role admin client to bypass RLS','Deletes in parallel to dodge Vercel function timeout','Preserves identity + consent; resets only financial fields'],
+    tag:['overview','auth','budget','all'] }),
+  N('admin-actions','actions','admin/actions.ts','admin ops',605,486,200,52,'service',{
+    role:'verifyAdmin-gated mirror of the advisor actions over the service-role client for any target user.',
+    plain:'The admin versions of every budget operation, able to act on another user after an admin check.',
+    path:'app/(dashboard)/admin/actions.ts',
+    notes:['Every action re-checks profiles.is_admin','Falls back from session_document_sets to document_sets for legacy users'],
+    tag:['admin','budget','all'] }),
+  N('bug-report-action','actions','bug-report-action.ts','bug reports',605,550,200,46,'service',{
+    role:'Inserts a row into bug_reports.',
+    plain:'Stores a message when someone clicks “Report a bug”.',
+    path:'app/(dashboard)/dashboard/bug-report-action.ts',
+    notes:['bug_reports now has a migration (020)'],
+    tag:['all'] }),
+
+  // ── SERVICES ──────────────────────────────────────────────
+  N('session','services','session.ts','document session',865,110,230,52,'service',{
+    role:'getOrCreateDocumentSession returns the user’s single active/completed document session (never duplicates).',
+    plain:'Creates and loads the per-user advisor session that ties your uploaded statements together.',
+    path:'lib/ai/session.ts',
+    notes:['Document-only now — the workflow/interview session code was removed','Links statements via session_document_sets'],
+    tag:['overview','chat','upload','all'], critical:true }),
+  N('budget-data','services','budget-data.ts','budget engine',865,176,230,56,'service',{
+    role:'Core computation: getBudgetRows aggregates transactions × settings × statement spans into sectioned rows; buildBudgetTableForPrompt renders the prompt table.',
+    plain:'The maths behind the budget — turns raw transactions and your edits into monthly figures per category, both for the screen and for the AI.',
+    path:'lib/ai/budget-data.ts',
+    notes:['Per-statement monthly = total ÷ that statement’s span_months, then summed','Ad Hoc section is not monthly-averaged','Paginates past Supabase’s 1000-row cap'],
+    tag:['overview','budget','chat','admin','all'], critical:true }),
+  N('doc-prompt','services','document-session-prompt.ts','analysis system prompt',865,246,230,54,'service',{
+    role:'buildDocumentSessionPrompt — Fin persona + FAIS rules + spending-classification guide + the live budget table.',
+    plain:'Writes the instructions and your budget into the message the AI sees before answering — the heart of the advisor’s behaviour.',
+    path:'lib/ai/document-session-prompt.ts',
+    notes:['Two modes: awaiting-documents vs open-analysis','Embeds buildBudgetTableForPrompt output','Forbids markdown/tables in replies'],
+    tag:['overview','chat','budget','all'], critical:true }),
+  N('categorize','services','categorize.ts','categorisation engine',865,314,230,54,'service',{
+    role:'categorizeDocumentSet — chunks debits (75/chunk), runs GPT in parallel with an integer-index CSV, maps back to UUIDs, bulk-updates transactions.category, manages document_sets.status.',
+    plain:'Sorts every debit into a budget category using the AI, then writes those labels back. Shared by the upload pipeline and the categorize endpoint.',
+    path:'lib/ai/categorize.ts',
+    notes:['Extracted from the old /api/categorize route so it can be called directly (no HTTP self-call)','Integer row indices in the CSV so the model can never corrupt a UUID','Any row the model misses → Miscellaneous'],
+    tag:['overview','upload','all'], critical:true }),
+  N('retrieval','services','retrieval.ts','knowledge base RAG',865,382,230,52,'service',{
+    role:'retrieveContext embeds the query and calls the match_documents RPC for top-k knowledge chunks.',
+    plain:'Looks up relevant facts from the built-in knowledge base to ground Fin’s answers.',
+    path:'lib/ai/retrieval.ts',
+    notes:['Uses the service-role client directly','threshold 0.3, top 5'],
+    tag:['overview','chat','kb','all'] }),
+  N('categories','services','categories.ts','budget taxonomy',865,448,230,50,'service',{
+    role:'The 5 sections and ~27 categories, section helpers, CATEGORY_SET.',
+    plain:'The master list of budget categories and which section each belongs to.',
+    path:'lib/ai/categories.ts',
+    notes:['Imported by budget-data, budget-table, categorize, utils','Ad Hoc treated as non-monthly via isMonthlySection'],
+    tag:['overview','budget','upload','all'] }),
+  N('schemas','services','transaction · category-assignment','extraction Zod',865,510,230,50,'service',{
+    role:'transaction-schema (save_transactions) and category-assignment-schema (assign_categories) — the extraction/categorisation tool shapes.',
+    plain:'The data shapes the upload and categorisation steps require from the AI.',
+    path:'lib/ai/transaction-schema.ts · category-assignment-schema.ts',
+    notes:['Both on the upload pipeline'],
+    tag:['overview','upload','all'] }),
+  N('misc-svc','services','sanitize · greetings','helpers',865,572,230,48,'service',{
+    role:'stripMarkdown (plain-prose enforcement) and DEFAULT_OPENER greeting text.',
+    plain:'Small helpers: strips formatting from AI summaries and holds the opening welcome line.',
+    path:'lib/ai/sanitize.ts · greetings.ts',
+    notes:['stripMarkdown used on the upload summary','DEFAULT_OPENER shown client-side, not sent to the model'],
+    tag:['overview','upload','chat','all'] }),
+  N('utils','services','lib/utils.ts','format + CSV',865,632,230,48,'service',{
+    role:'cn, formatZAR, formatPercent, buildAdminCsv (sectioned export).',
+    plain:'Shared formatting helpers and the CSV builder used by the export button.',
+    path:'lib/utils.ts',
+    notes:['buildAdminCsv used by budget-panel export','formatZAR used across the table'],
+    tag:['overview','budget','admin','all'] }),
+  N('supabase-clients','services','supabase/{client,server,admin}','SDK clients',865,692,230,50,'service',{
+    role:'Three Supabase factories: browser, cookie-bound server, and service-role admin.',
+    plain:'The connectors the app uses to talk to the database — one per context (browser, server, admin).',
+    path:'lib/supabase/server.ts · client.ts · admin.ts',
+    notes:['Server client typed with Database generic; often cast as any (known SSR typing bug)','admin uses SUPABASE_SERVICE_ROLE_KEY, bypasses RLS'],
+    tag:['overview','auth','all'], critical:true }),
+  N('db-types','services','types/database.ts','generated types',865,754,230,46,'service',{
+    role:'Supabase-generated Database type.',
+    plain:'Auto-generated TypeScript description of the database tables.',
+    path:'types/database.ts',
+    notes:['Hand-maintained; regenerate after schema changes if you want it exact'],
+    tag:['all'] }),
+
+  // ── DATA ──────────────────────────────────────────────────
+  N('t-profiles','data','profiles','KYC + totals',1150,90,205,46,'db',{
+    role:'Per-user identity, consent, is_admin, and the five headline financial totals.',
+    plain:'Your account record: name, ID, consent, and headline money figures.',
+    path:'supabase/migrations/001_initial_schema.sql',
+    notes:['RLS: auth.uid() = user_id','Auto-created by handle_new_user trigger on signup','id_number is sensitive PII'],
+    tag:['overview','auth','all'] }),
+  N('t-chat-sessions','data','chat_sessions','sessions',1150,148,205,46,'db',{
+    role:'One document session per user; holds document_set_id + session_type.',
+    plain:'Tracks each advisor conversation and which uploaded statements it is about.',
+    path:'supabase/migrations/002 · 022',
+    notes:['Legacy workflow/current_step/fields_collected columns dropped in migration 022'],
+    tag:['overview','chat','upload','all'] }),
+  N('t-transactions','data','transactions','line-level spend',1150,206,205,50,'db',{
+    role:'Every extracted transaction: amount, debit/credit, category, plus is_deleted / is_ignored flags.',
+    plain:'The raw rows pulled from your statements — the source of every budget number.',
+    path:'supabase/migrations/007 · 021',
+    notes:['category written by the categorize engine and by edits','is_duplicate column dropped in migration 021','Paginated reads (1000-row cap)'],
+    tag:['overview','upload','budget','chat','all'], critical:true }),
+  N('t-document-sets','data','document_sets','upload batches',1150,268,205,46,'db',{
+    role:'One row per uploaded file batch: status, bank_source, span_months.',
+    plain:'A record of each statement you uploaded and how it is progressing.',
+    path:'supabase/migrations/006_document_sets.sql',
+    notes:['status: parsing → categorizing → ready | error','span_months set via the months modal'],
+    tag:['overview','upload','all'] }),
+  N('t-sds','data','session_document_sets','session↔docset link',1150,326,205,46,'db',{
+    role:'Junction table giving each document set an upload_order within a session.',
+    plain:'Links your uploaded statements to your advisor session, in order.',
+    path:'supabase/migrations/020 (captured)',
+    notes:['Drives statement numbering + per-statement breakdowns','Was undocumented; now captured in migration 020'],
+    tag:['overview','upload','budget','all'] }),
+  N('t-budget-settings','data','user_budget_settings','overrides + custom cats',1150,384,205,48,'db',{
+    role:'Per-user, per-category overrides: monthly/current/retirement estimates, exclusions, custom categories.',
+    plain:'Your manual tweaks to the budget — edited figures, hidden categories, and any categories you created.',
+    path:'supabase/migrations/012_user_budget_settings.sql',
+    notes:['Upserted on conflict (user_id, category)','retirement_estimate column doubles as the retirement override'],
+    tag:['overview','budget','all'] }),
+  N('t-documents','data','documents','vector store',1150,444,205,46,'db',{
+    role:'pgvector knowledge-base chunks + embeddings (1536-dim, ivfflat cosine index).',
+    plain:'The searchable knowledge base Fin draws facts from.',
+    path:'supabase/migrations/020 (captured)',
+    notes:['Populated by scripts/ingest.py, not the app','Was undocumented; now captured in migration 020'],
+    tag:['kb','all'] }),
+  N('rpc-match','data','match_documents()','similarity RPC',1150,502,205,46,'db',{
+    role:'Postgres RPC: cosine similarity search over documents.',
+    plain:'The database function that finds the closest knowledge-base chunks to a question.',
+    path:'supabase/migrations/020 (captured)',
+    notes:['Called by retrieveContext','Defaults: threshold 0.3, count 5'],
+    tag:['kb','chat','all'] }),
+  N('t-bug-reports','data','bug_reports','feedback',1150,560,205,44,'db',{
+    role:'User-submitted bug messages.',
+    plain:'Where “Report a bug” messages land.',
+    path:'supabase/migrations/020 (captured)',
+    notes:['Insert policy: auth.uid() = user_id','Was undocumented; now captured in migration 020'],
+    tag:['all'] }),
+
+  // ── EXTERNAL ──────────────────────────────────────────────
+  N('supabase-auth','external','Supabase Auth','identity',1405,140,210,46,'external',{
+    role:'Auth provider: sessions, getUser, sign-in/out, code exchange.',
+    plain:'The service that manages logins and keeps you signed in.',
+    path:'@supabase/ssr · @supabase/supabase-js',
+    notes:['Refreshed in middleware on every request','on_auth_user_created trigger seeds profiles'],
+    tag:['overview','auth','all'] }),
+  N('openai-chat','external','OpenAI · gpt-5.4-mini','chat + extraction',1405,210,210,52,'external',{
+    role:'LLM behind chat (streamText), document extraction (generateText), and categorisation — all via @ai-sdk/openai.',
+    plain:'The AI model that reads statements, sorts transactions, and answers your questions.',
+    path:'@ai-sdk/openai · ai (v6)',
+    notes:['One model id used across all three flows','AI SDK v6: tool() uses inputSchema; stopWhen: stepCountIs(N)'],
+    tag:['overview','upload','chat','all'], critical:true }),
+  N('openai-embed','external','OpenAI · embeddings','text-embedding-3-small',1405,470,210,50,'external',{
+    role:'Embedding model for query → vector in retrieval, and for ingestion.',
+    plain:'Turns text into numbers so the knowledge base can be searched by meaning.',
+    path:'lib/ai/retrieval.ts',
+    notes:['Called per chat request by retrieveContext','Same model used by scripts/ingest.py'],
+    tag:['chat','kb','all'] }),
+  N('ingest','external','scripts/ingest.py','KB loader',1405,560,210,48,'external',{
+    role:'Offline Python script: chunks knowledge-base/*.md, embeds, upserts into documents.',
+    plain:'A one-off script the team runs to load the knowledge base into the database.',
+    path:'scripts/ingest.py',
+    notes:['Run manually, outside the Next.js app','CHUNK_SIZE 1000 / overlap 100','Writes the documents table the app only reads'],
+    tag:['kb','all'] }),
+];
+
+/* ============================================================
+   EDGES
+   ============================================================ */
+const E = (from,to,kind,label,tag)=>({from,to,kind,label,tag:tag||['all']});
+const edges = [
+  // entry / mounts
+  E('home','middleware','mount','redirect',['overview','auth','all']),
+  E('middleware','supabase-auth','api','getUser / refresh',['overview','auth','all']),
+  E('auth-pages','supabase-auth','api','sign in/up',['auth','all']),
+  E('auth-callback','supabase-auth','api','exchange code',['auth','all']),
+  E('dash-layout','supabase-auth','api','auth guard',['overview','auth','all']),
+  E('dash-layout','t-profiles','db','read name + is_admin',['overview','auth','all']),
+  E('dash-layout','top-nav','mount','renders',['overview','all']),
+  E('dash-layout','advisor-page','mount','child',['overview','all']),
+  E('dash-layout','dashboard-page','mount','child',['overview','all']),
+  E('dash-layout','profile-page','mount','child',['overview','all']),
+  E('dash-layout','admin-container','mount','child',['admin','all']),
+
+  // advisor client wiring
+  E('advisor-page','advisor-container','mount','renders',['overview','upload','chat','all']),
+  E('advisor-container','advisor-chat','mount','renders',['overview','chat','all']),
+  E('advisor-container','budget-panel','mount','renders',['overview','budget','all']),
+  E('budget-panel','budget-table','mount','renders',['overview','budget','all']),
+  E('advisor-chat','modals','mount','help/months',['overview','upload','all']),
+
+  // ── CRITICAL: upload pipeline ──
+  E('advisor-chat','route-parse','critical','1 · POST /api/parse-document',['overview','upload','all']),
+  E('route-parse','openai-chat','critical','2 · extract (PDF/image)',['overview','upload','all']),
+  E('route-parse','schemas','normal','save_transactions shape',['upload','all']),
+  E('route-parse','t-transactions','critical','3 · insert transactions',['overview','upload','all']),
+  E('route-parse','t-document-sets','db','create + status',['overview','upload','all']),
+  E('route-parse','categorize','critical','4 · categorizeDocumentSet()',['overview','upload','all']),
+  E('route-categorize','categorize','normal','thin wrapper',['overview','upload','all']),
+  E('categorize','openai-chat','critical','5 · assign_categories',['overview','upload','all']),
+  E('categorize','schemas','normal','assignment shape',['upload','all']),
+  E('categorize','t-transactions','critical','6 · read + update category',['overview','upload','all']),
+  E('categorize','t-document-sets','db','status',['upload','all']),
+  E('categorize','categories','normal','CATEGORY_SET',['upload','all']),
+  E('advisor-chat','advisor-actions','normal','saveSpanMonths / register',['upload','all']),
+
+  // ── CRITICAL: chat pipeline ──
+  E('advisor-chat','route-chat','critical','A · POST /api/chat {sessionId}',['overview','chat','all']),
+  E('route-chat','session','critical','B · getOrCreateDocumentSession',['overview','chat','all']),
+  E('route-chat','doc-prompt','critical','C · buildDocumentSessionPrompt',['overview','chat','all']),
+  E('doc-prompt','budget-data','critical','D · buildBudgetTableForPrompt',['overview','chat','budget','all']),
+  E('route-chat','retrieval','normal','retrieveContext',['chat','kb','all']),
+  E('route-chat','openai-chat','critical','E · streamText + tools',['overview','chat','all']),
+  E('route-chat','t-transactions','db','tool: move / get tx',['chat','budget','all']),
+  E('route-chat','t-budget-settings','db','tool: update estimate',['chat','budget','all']),
+  E('route-chat','t-sds','db','resolve doc sets',['chat','all']),
+  E('route-chat','budget-data','db','getBudgetRows (tools)',['chat','budget','all']),
+
+  // budget render path
+  E('advisor-container','advisor-actions','normal','getBudgetRowsAction',['overview','budget','all']),
+  E('budget-table','advisor-actions','normal','move/ignore/edit',['budget','all']),
+  E('advisor-actions','budget-data','normal','getBudgetRows',['overview','budget','all']),
+  E('budget-data','t-transactions','db','read debits/credits',['overview','budget','all']),
+  E('budget-data','t-budget-settings','db','read overrides',['overview','budget','all']),
+  E('budget-data','t-document-sets','db','read span_months',['overview','budget','all']),
+  E('budget-data','t-sds','db','read upload_order',['overview','budget','all']),
+  E('advisor-actions','t-transactions','db','move/ignore/delete',['budget','all']),
+  E('advisor-actions','t-budget-settings','db','upsert overrides',['budget','all']),
+  E('advisor-actions','t-sds','db','register doc set',['upload','all']),
+  E('advisor-actions','t-document-sets','db','span_months',['upload','all']),
+  E('advisor-actions','session','normal','getOrCreateDocumentSession',['overview','upload','all']),
+  E('budget-table','categories','normal','sections/categories',['budget','all']),
+  E('budget-panel','utils','normal','buildAdminCsv',['budget','all']),
+
+  // dashboard
+  E('dashboard-page','advisor-actions','normal','getDocumentSession / budget rows',['overview','budget','all']),
+  E('dashboard-page','dashboard-budget-section','mount','renders',['overview','budget','all']),
+  E('dashboard-budget-section','budget-table','mount','renders',['overview','budget','all']),
+
+  // profile + delete
+  E('profile-page','profile-actions','normal','save profile',['overview','auth','all']),
+  E('budget-panel','profile-actions','normal','deleteAllUserData',['budget','all']),
+  E('profile-actions','supabase-clients','normal','service-role client',['overview','all']),
+  E('profile-actions','t-transactions','db','wipe',['budget','all']),
+  E('profile-actions','t-profiles','db','reset financials',['overview','auth','all']),
+  E('profile-actions','t-document-sets','db','wipe',['budget','all']),
+  E('profile-actions','t-chat-sessions','db','wipe',['all']),
+
+  // admin
+  E('admin-container','admin-actions','normal','admin ops',['admin','all']),
+  E('admin-container','budget-table','mount','renders (overrides)',['admin','budget','all']),
+  E('admin-actions','supabase-clients','normal','service-role',['admin','all']),
+  E('admin-actions','budget-data','normal','getBudgetRows',['admin','budget','all']),
+  E('admin-actions','t-profiles','db','verify is_admin',['admin','all']),
+  E('admin-actions','t-transactions','db','move/delete',['admin','budget','all']),
+  E('admin-actions','t-budget-settings','db','upsert',['admin','budget','all']),
+
+  // services → infra/external
+  E('session','supabase-clients','normal','server client',['overview','chat','all']),
+  E('budget-data','categories','normal','section helpers',['overview','budget','all']),
+  E('doc-prompt','categories','normal','classification guide',['chat','all']),
+  E('retrieval','rpc-match','api','match_documents RPC',['chat','kb','all']),
+  E('retrieval','openai-embed','api','embed query',['chat','kb','all']),
+  E('rpc-match','t-documents','db','vector search',['kb','all']),
+  E('route-parse','misc-svc','normal','stripMarkdown summary',['upload','all']),
+  E('advisor-chat','misc-svc','normal','DEFAULT_OPENER',['chat','all']),
+
+  // bug reports
+  E('budget-panel','bug-report-action','normal','submitBugReport',['all']),
+  E('bug-report-action','t-bug-reports','db','insert',['all']),
+
+  // knowledge base ingestion (offline)
+  E('ingest','openai-embed','api','embed chunks',['kb','all']),
+  E('ingest','t-documents','db','upsert chunks',['kb','all']),
+];
+
+/* No issue/fix overlay — the cleanup backlog lives in docs/tech-debt.md. */
+const FIXES = {};
+const KNOWN_BUGS = {};
+
+/* ============================================================
+   RENDER ENGINE  (vanilla SVG)
+   ============================================================ */
+const SVGNS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svg');
+const vp=document.getElementById('viewport');
+const gC=document.getElementById('gClusters');
+const gE=document.getElementById('gEdges');
+const gEL=document.getElementById('gEdgeLabels');
+const gN=document.getElementById('gNodes');
+const defs=svg.querySelector('defs');
+const nodeById=Object.fromEntries(nodes.map(n=>[n.id,n]));
+const cvar=c=>getComputedStyle(document.documentElement).getPropertyValue('--'+c).trim();
+const kindColor={critical:'critical',api:'external',db:'db',mount:'client',normal:'muted'};
+
+['client','route','service','db','external','critical','muted'].forEach(c=>{
+  const col = c==='muted'? '#6a6a6a' : cvar(c);
+  const m=document.createElementNS(SVGNS,'marker');
+  m.setAttribute('id','arr-'+c);m.setAttribute('viewBox','0 0 10 10');
+  m.setAttribute('refX','9');m.setAttribute('refY','5');m.setAttribute('markerWidth','7');
+  m.setAttribute('markerHeight','7');m.setAttribute('orient','auto-start-reverse');
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('d','M0,0 L10,5 L0,10 z');p.setAttribute('fill',col);
+  m.appendChild(p);defs.appendChild(m);
+});
+
+clusters.forEach(c=>{
+  const col=cvar(c.color);
+  const r=document.createElementNS(SVGNS,'rect');
+  r.setAttribute('x',c.x);r.setAttribute('y',c.y);r.setAttribute('width',c.w);r.setAttribute('height',c.h);
+  r.setAttribute('rx',16);r.setAttribute('class','cluster');
+  r.setAttribute('fill',col);r.setAttribute('stroke',col);
+  gC.appendChild(r);
+  const t=document.createElementNS(SVGNS,'text');
+  t.setAttribute('x',c.x+16);t.setAttribute('y',c.y+26);t.setAttribute('class','cluster-label');
+  t.setAttribute('fill',col);t.textContent=c.label;
+  gC.appendChild(t);
+});
+
+function edgePath(a,b){
+  const x1=a.x+a.w, y1=a.y+a.h/2, x2=b.x, y2=b.y+b.h/2;
+  if(b.x < a.x){
+    const xx1=a.x, xx2=b.x+b.w;
+    const dx=Math.max(60,(xx1-xx2)/2);
+    return {d:`M${xx1},${y1} C${xx1-dx},${y1} ${xx2+dx},${y2} ${xx2},${y2}`, sx:xx1,sy:y1,ex:xx2,ey:y2,back:true};
+  }
+  const dx=Math.max(50,(x2-x1)/2);
+  return {d:`M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`, sx:x1,sy:y1,ex:x2,ey:y2,back:false};
+}
+const edgeEls=[];
+edges.forEach((e,i)=>{
+  const a=nodeById[e.from], b=nodeById[e.to];
+  if(!a||!b)return;
+  const col=kindColor[e.kind]||'muted';
+  const strokeCol = col==='muted'?'#5a5a5a':cvar(col);
+  const pp=edgePath(a,b);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',pp.d);path.setAttribute('class','edge');
+  path.setAttribute('stroke',strokeCol);
+  path.setAttribute('marker-end','url(#arr-'+col+')');
+  if(e.kind==='critical'){path.setAttribute('stroke-width','2.4');}
+  if(e.kind==='db'||e.kind==='api'){path.setAttribute('stroke-dasharray','5 4');}
+  gE.appendChild(path);
+  const t=document.createElementNS(SVGNS,'text');
+  const mx=(pp.sx+pp.ex)/2, my=(pp.sy+pp.ey)/2 - 4 + (pp.back? -8: ((i%3)-1)*5);
+  t.setAttribute('x',mx);t.setAttribute('y',my);t.setAttribute('text-anchor','middle');
+  t.setAttribute('class','edge-label');t.textContent=e.label;
+  gEL.appendChild(t);
+  edgeEls.push({e,path,label:t});
+});
+
+const nodeEls={};
+nodes.forEach(n=>{
+  const g=document.createElementNS(SVGNS,'g');
+  g.setAttribute('class','node'+(n.critical?' critical':''));
+  g.setAttribute('transform',`translate(${n.x},${n.y})`);
+  const col=cvar(n.color);
+  const r=document.createElementNS(SVGNS,'rect');
+  r.setAttribute('width',n.w);r.setAttribute('height',n.h);r.setAttribute('rx',9);
+  r.setAttribute('stroke', n.critical?cvar('critical'):col);
+  g.appendChild(r);
+  const t1=document.createElementNS(SVGNS,'text');
+  t1.setAttribute('x',13);t1.setAttribute('y',n.h/2 - 2);t1.setAttribute('class','nl');
+  t1.textContent=n.label;g.appendChild(t1);
+  const t2=document.createElementNS(SVGNS,'text');
+  t2.setAttribute('x',13);t2.setAttribute('y',n.h/2 + 14);t2.setAttribute('class','ns');
+  t2.textContent=n.sub;g.appendChild(t2);
+  g.addEventListener('click',ev=>{ev.stopPropagation();select(n.id);});
+  g.addEventListener('mouseenter',()=>{ if(!selected) highlight(n.id); });
+  g.addEventListener('mouseleave',()=>{ if(!selected) clearHighlight(); });
+  gN.appendChild(g);
+  nodeEls[n.id]=g;
+});
+
+/* ============================================================
+   PAN + ZOOM
+   ============================================================ */
+let tx=0,ty=0,scale=1;
+function apply(){vp.setAttribute('transform',`translate(${tx},${ty}) scale(${scale})`);
+  document.getElementById('zlbl').textContent=Math.round(scale*100)+'%';}
+function fit(){
+  const pad=60;
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  clusters.forEach(c=>{minX=Math.min(minX,c.x);minY=Math.min(minY,c.y);maxX=Math.max(maxX,c.x+c.w);maxY=Math.max(maxY,c.y+c.h);});
+  const w=maxX-minX,h=maxY-minY;
+  const rect=svg.getBoundingClientRect();
+  const s=Math.min((rect.width-pad*2)/w,(rect.height-pad*2)/h);
+  scale=Math.min(s,1.1);
+  tx=(rect.width-w*scale)/2 - minX*scale;
+  ty=(rect.height-h*scale)/2 - minY*scale + 10;
+  apply();
+}
+const stage=document.getElementById('stage');
+let dragging=false,lx=0,ly=0;
+stage.addEventListener('mousedown',e=>{dragging=true;lx=e.clientX;ly=e.clientY;stage.classList.add('panning');});
+window.addEventListener('mouseup',()=>{dragging=false;stage.classList.remove('panning');});
+window.addEventListener('mousemove',e=>{if(!dragging)return;tx+=e.clientX-lx;ty+=e.clientY-ly;lx=e.clientX;ly=e.clientY;apply();});
+stage.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const rect=svg.getBoundingClientRect();
+  const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  const f=e.deltaY<0?1.12:1/1.12;
+  const ns=Math.max(.2,Math.min(3,scale*f));
+  tx=mx-(mx-tx)*(ns/scale);ty=my-(my-ty)*(ns/scale);scale=ns;apply();
+},{passive:false});
+document.getElementById('zin').onclick=()=>{scale=Math.min(3,scale*1.15);apply();};
+document.getElementById('zout').onclick=()=>{scale=Math.max(.2,scale/1.15);apply();};
+document.getElementById('zfit').onclick=fit;
+stage.addEventListener('click',()=>{ if(selected){selected=null;clearHighlight();renderSidebar(null);} });
+
+/* ============================================================
+   HIGHLIGHT + SELECT
+   ============================================================ */
+let selected=null;
+function neighbours(id){
+  const ins=[],outs=[],keep=new Set([id]);
+  edges.forEach(e=>{
+    if(e.from===id){outs.push(e);keep.add(e.to);}
+    if(e.to===id){ins.push(e);keep.add(e.from);}
+  });
+  return {ins,outs,keep};
+}
+function highlight(id){
+  const {keep}=neighbours(id);
+  nodes.forEach(n=>nodeEls[n.id].classList.toggle('dim',!keep.has(n.id)));
+  edgeEls.forEach(({e,path,label})=>{
+    const on=(e.from===id||e.to===id);
+    path.classList.toggle('dim',!on);label.classList.toggle('dim',!on);
+  });
+}
+function clearHighlight(){
+  if(selected){highlight(selected);return;}
+  nodes.forEach(n=>nodeEls[n.id].classList.remove('dim'));
+  edgeEls.forEach(({path,label})=>{path.classList.remove('dim');label.classList.remove('dim');});
+  applyFilter();
+}
+function select(id){
+  selected=id;
+  Object.values(nodeEls).forEach(g=>g.classList.remove('sel'));
+  nodeEls[id].classList.add('sel');
+  highlight(id);renderSidebar(id);
+}
+
+/* ============================================================
+   FILTER CHIPS
+   ============================================================ */
+const FILTERS=[
+  {id:'overview',label:'Overview'},
+  {id:'upload',label:'Upload → Budget'},
+  {id:'chat',label:'Advisor chat'},
+  {id:'budget',label:'Budget editing'},
+  {id:'kb',label:'Knowledge base'},
+  {id:'admin',label:'Admin'},
+  {id:'auth',label:'Auth'},
+  {id:'all',label:'Show all wires'},
+];
+let activeFilter='overview';
+const chipsWrap=document.getElementById('chips');
+FILTERS.forEach(f=>{
+  const s=document.createElement('span');
+  s.className='chip'+(f.id===activeFilter?' active':'');
+  s.textContent=f.label;s.dataset.id=f.id;
+  s.onclick=()=>{activeFilter=f.id;
+    document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('active',c.dataset.id===f.id));
+    selected=null;Object.values(nodeEls).forEach(g=>g.classList.remove('sel'));
+    applyFilter();renderSidebar(null);};
+  chipsWrap.appendChild(s);
+});
+function applyFilter(){
+  if(selected)return;
+  const tagOn=(arr)=>arr&&arr.includes(activeFilter);
+  nodes.forEach(n=>nodeEls[n.id].classList.toggle('dim',!tagOn(n.tag)));
+  edgeEls.forEach(({e,path,label})=>{
+    const on=tagOn(e.tag);
+    path.classList.toggle('dim',!on);label.classList.toggle('dim',!on);
+  });
+}
+
+/* ============================================================
+   SIDEBAR
+   ============================================================ */
+const side=document.getElementById('side');
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function renderSidebar(id){
+  if(!id){ side.innerHTML=defaultSidebar(); return; }
+  const n=nodeById[id];const {ins,outs}=neighbours(id);
+  let h=`<h2>${esc(n.label)}</h2><div class="ns" style="color:var(--muted)">${esc(n.sub)} · <span style="color:var(--${n.color})">${n.cluster}</span></div>`;
+  if(n.critical) h+=`<div style="color:var(--critical);font-size:11px;font-weight:600;margin-top:6px">● on the critical path</div>`;
+  h+=`<div class="role">Role</div><div class="roletext">${esc(n.role)}</div>`;
+  h+=`<div class="plain">${esc(n.plain)}</div>`;
+  if(n.path)h+=`<div class="path">${esc(n.path)}</div>`;
+  if(n.notes&&n.notes.length){h+=`<div class="role">Notes</div><ul>`+n.notes.map(x=>`<li>${esc(x)}</li>`).join('')+`</ul>`;}
+  if(outs.length){h+=`<div class="role">Calls →</div>`+outs.map(e=>`<div class="edgeline"><span class="arrow">→</span> <b>${esc(nodeById[e.to].label)}</b> · ${esc(e.label)}</div>`).join('');}
+  if(ins.length){h+=`<div class="role">← Called by</div>`+ins.map(e=>`<div class="edgeline"><span class="arrow">←</span> <b>${esc(nodeById[e.from].label)}</b> · ${esc(e.label)}</div>`).join('');}
+  if(n.tag){h+=`<div class="sec"><div class="role">Filters</div>`+n.tag.filter(t=>t!=='all').map(t=>`<span class="tag">${t}</span>`).join('')+`</div>`;}
+  side.innerHTML=h;
+}
+function defaultSidebar(){
+  return `
+  <h2>Fin Planner — FinSight AI</h2>
+  <div class="plain">A South African personal-finance advisor: upload bank statements, an AI categorises every transaction into a budget, then you chat with “Fin” to understand and edit it. Next.js 16 · Supabase (RLS) · AI SDK v6 · OpenAI.</div>
+
+  <div class="role" style="margin-top:16px">The critical path (red)</div>
+  <div class="roletext" style="font-size:12.5px">
+  <b>Upload:</b> advisor-chat → /api/parse-document → (pdf-parse / SheetJS / GPT) → transactions → categorizeDocumentSet → GPT → transactions.category.<br><br>
+  <b>Chat:</b> advisor-chat → /api/chat → buildDocumentSessionPrompt ← budget-data (the budget table is injected into the prompt) → streamText(GPT) with budget tools.
+  </div>
+
+  <div class="sec findings">
+  <div class="role">How to read this map</div>
+  <ul>
+    <li>Six columns, left → right: <b>Client UI · API Routes · Server Actions · AI/Domain Services · Data · External</b>.</li>
+    <li><b>budget-data</b> is the single source of truth for every budget figure — it feeds both the on-screen table and the AI prompt.</li>
+    <li><b>categorize</b> (the categorisation engine) is shared: the upload route and the /api/categorize endpoint both call it directly.</li>
+    <li>The whole app is document-upload-driven — the old interview/workflow flow has been removed.</li>
+    <li>Known follow-ups (lint, RAG-per-request, tests, etc.) live in <span class="src">docs/tech-debt.md</span>, not on this map.</li>
+  </ul>
+  </div>
+
+  <div class="hint">Hover a node to isolate its wires · click to pin it · click empty space to clear · use the chips up top to filter by feature. Unrelated wires hide while a node or filter is active.</div>
+  `;
+}
+
+/* ============================================================
+   LEGEND
+   ============================================================ */
+document.getElementById('legend').innerHTML=`
+  <span class="lk"><b>Wires:</b></span>
+  <span class="lk"><i style="border-color:${cvar('critical')}"></i>critical path</span>
+  <span class="lk"><i style="border-color:${cvar('external')};border-top-style:dashed"></i>external API</span>
+  <span class="lk"><i style="border-color:${cvar('db')};border-top-style:dashed"></i>DB read/write</span>
+  <span class="lk"><i style="border-color:${cvar('client')}"></i>mount</span>
+  <span class="lk"><i style="border-color:#5a5a5a"></i>call</span>
+`;
+
+/* init */
+renderSidebar(null);
+applyFilter();
+fit();
+</script>
+</body>
+</html>
